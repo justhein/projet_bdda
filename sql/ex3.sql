@@ -1,112 +1,120 @@
--- Création de la séquence pour l'autoincrémentation de user_id
-CREATE SEQUENCE seq_user_id
-START WITH 1
-INCREMENT BY 1
-NOCACHE
-NOCYCLE;
+-- ========================================
+-- QUESTION 1 : CRÉER LA TABLE ACCESS
+-- ========================================
 
--- Création de la table ACESS
 CREATE TABLE ACESS (
-    user_id NUMBER PRIMARY KEY,
-    login VARCHAR2(50) NOT NULL,
-    password VARCHAR2(100) NOT NULL,
-    access_level CHAR(1) CHECK (access_level IN ('L','E','U','D','T'))
+    user_id NUMBER GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1) PRIMARY KEY,
+    login VARCHAR2(100) NOT NULL UNIQUE,
+    password VARCHAR2(255) NOT NULL,
+    access_level CHAR(1) DEFAULT 'L' NOT NULL,
+    CONSTRAINT CK_ACCESS_LEVEL CHECK (access_level IN ('L', 'E', 'U', 'D', 'T'))
 );
 
--- Trigger pour remplir automatiquement user_id à l'insertion
-CREATE OR REPLACE TRIGGER trg_acess_user_id
-BEFORE INSERT ON ACESS
-FOR EACH ROW
-BEGIN
-    IF :NEW.user_id IS NULL THEN
-        SELECT seq_user_id.NEXTVAL INTO :NEW.user_id FROM dual;
-    END IF;
-END;
-/
+-- ========================================
+-- QUESTION 2 : REMPLIR LA TABLE ACCESS
+-- ========================================
 
+-- 2.1 Ajouter les CLIENTS avec :
+-- - login = nom.prenom
+-- - password = MD5(nom.prenom) généré automatiquement
+-- - access_level = 'L' (lecture par défaut)
 
+-- Pour les CLIENTS (avec CodeC pour l'unicité)
+-- Supprimer les données (pas la table)
+DELETE FROM ACESS;
 
--- ex3 q2
--- Trigger pour remplir ACESS automatiquement pour CLIENT et PROPRIETAIRE
-CREATE OR REPLACE TRIGGER trg_acess_default
-BEFORE INSERT ON ACESS
-FOR EACH ROW
-DECLARE
-    v_password_raw VARCHAR2(100);
-BEGIN
-    -- Si le login et password sont NULL, on suppose que c'est pour un client
-    IF :NEW.login IS NULL THEN
-        -- On met le login en nom.prenom depuis CLIENT
-        SELECT LOWER(c.Nom || '.' || c.Prenom)
-        INTO :NEW.login
-        FROM CLIENT c
-        WHERE c.CodeC = :NEW.user_id;
+-- Réinsérer les clients
+INSERT INTO ACESS (login, password, access_level)
+SELECT 
+    LOWER("Nom" || '.' || "Prenom" || '.' || "CodeC") AS login,
+    '***' || SUBSTR("Nom", 1, 3) || SUBSTR("Prenom", 1, 3) || '***' AS password,
+    'L' AS access_level
+FROM CLIENT;
 
-        -- On génère un mot de passe MD5 (Oracle utilise standard_hash)
-        v_password_raw := :NEW.login || '123'; -- tu peux adapter la base du password
-        :NEW.password := standard_hash(v_password_raw,'MD5');
+-- Réinsérer les propriétaires
+INSERT INTO ACESS (login, password, access_level)
+SELECT 
+    "email" || '.' || "codeP" AS login,
+    '***' || SUBSTR("Pseudo", 1, 3) || '***' AS password,
+    'E' AS access_level
+FROM PROPRIETAIRE
+WHERE "email" IS NOT NULL;
 
-        -- Niveau d'accès par défaut
-        :NEW.access_level := 'L';
-    END IF;
+-- Vérifier
+SELECT * FROM ACESS;
 
-    -- Si login est fourni mais access_level NULL (pour PROPRIETAIRE)
-    IF :NEW.access_level IS NULL THEN
-        :NEW.access_level := 'E';
-    END IF;
-END;
-/
+-- ========================================
+-- QUESTION 3 : CRÉER PLUSIEURS UTILISATEURS
+-- ========================================
 
--- ex3 q3: création des user
--- a) Utilisateur lecture seule
-CREATE USER user_read IDENTIFIED BY password123;
+-- 3.a UTILISATEUR 1 : Lecture limitée (lecture seule sur CLIENT et PROPRIETAIRE)
+CREATE USER user_lecteur IDENTIFIED BY "Lecteur123!";
+GRANT CONNECT TO user_lecteur;
+GRANT SELECT ON AGENCE_VOYAGE.CLIENT TO user_lecteur;
+GRANT SELECT ON AGENCE_VOYAGE.PROPRIETAIRE TO user_lecteur;
 
--- b) Utilisateur modification (insert/update)
-CREATE USER user_write IDENTIFIED BY password123;
+-- 3.b UTILISATEUR 2 : Modifications (INSERT et UPDATE sur LOCATION et VOITURE)
+CREATE USER user_modif IDENTIFIED BY "Modif123!";
+GRANT CONNECT TO user_modif;
+GRANT SELECT ON AGENCE_VOYAGE.LOCATION TO user_modif;
+GRANT SELECT ON AGENCE_VOYAGE.VOITURE TO user_modif;
+GRANT INSERT ON AGENCE_VOYAGE.LOCATION TO user_modif;
+GRANT UPDATE ON AGENCE_VOYAGE.LOCATION TO user_modif;
+GRANT INSERT ON AGENCE_VOYAGE.VOITURE TO user_modif;
+GRANT UPDATE ON AGENCE_VOYAGE.VOITURE TO user_modif;
 
--- c) Utilisateur total
-CREATE USER user_admin IDENTIFIED BY password123;
-
--- Tous les utilisateurs doivent pouvoir se connecter
-GRANT CREATE SESSION TO user_read;
-GRANT CREATE SESSION TO user_write;
-GRANT CREATE SESSION TO user_admin;
-
--- Exemple: lecture seulement sur CLIENT et VOITURE
-GRANT SELECT ON CLIENT TO user_read;
-GRANT SELECT ON VOITURE TO user_read;
-GRANT SELECT ON PROPRIETAIRE TO user_read;
-GRANT SELECT ON LOCATION TO user_read;
-GRANT SELECT ON ACESS TO user_read;
-
--- Exemple: insert/update sur CLIENT et LOCATION
-GRANT SELECT, INSERT, UPDATE ON CLIENT TO user_write;
-GRANT SELECT, INSERT, UPDATE ON LOCATION TO user_write;
-GRANT SELECT, INSERT, UPDATE ON PROPRIETAIRE TO user_write;
-GRANT SELECT, INSERT, UPDATE ON VOITURE TO user_write;
-GRANT SELECT, INSERT, UPDATE ON ACESS TO user_write;
-
--- Tous droits sur toutes les tables
-GRANT ALL PRIVILEGES TO user_admin;
+-- 3.c UTILISATEUR 3 : Tous les droits (admin) avec possibilité de partager les droits
+DROP USER user_admin;
+CREATE USER user_admin IDENTIFIED BY "Admin123!";
+GRANT DBA TO user_admin;
 GRANT GRANT ANY PRIVILEGE TO user_admin;
+GRANT GRANT ANY OBJECT PRIVILEGE TO user_admin;
+
+-- Vérifier les utilisateurs créés
+SELECT username FROM dba_users WHERE username IN ('USER_LECTEUR', 'USER_MODIF', 'USER_ADMIN');
+
+-- ========================================
+-- QUESTION 4 : TESTER LES OPÉRATIONS
+-- ========================================
+
+-- NOTE : Exécutez les sections suivantes en vous connectant avec chaque utilisateur
+
+-- ========== TEST AVEC USER_LECTEUR ==========
+-- Connexion : user_lecteur / Lecteur123!
+
+SELECT * FROM AGENCE_VOYAGE.CLIENT;
+
+INSERT INTO AGENCE_VOYAGE.CLIENT VALUES ('C999', 'Test', 'User', 25, '999999', 'rue Test', 'Paris');
+
+UPDATE AGENCE_VOYAGE.CLIENT SET "Nom" = 'Updated' WHERE "CodeC" = 'C672';
+
+DELETE FROM AGENCE_VOYAGE.CLIENT WHERE "CodeC" = 'C672';
 
 
--- CONNEXION AVEC CHAQUE USER
--- user_read
-SELECT * FROM CLIENT; -- fonctionne 
-INSERT INTO CLIENT (codec, PRENOM ) VALUES ('C999', 'Martin'); -- SQL Error [1031] [42000]: ORA-01031: insufficient privileges
+-- ========== TEST AVEC USER_MODIF ==========
+-- Connexion : user_modif / Modif123!
 
--- user_write
-INSERT INTO CLIENT (CodeC, Nom, Prenom, age, Permis, Adresse, Ville)
-VALUES ('C989', 'Test', 'User', 30, 'B', '123 Rue Test', 'Paris');
-UPDATE CLIENT
-SET Nom = 'TestUpdated'
-WHERE CodeC = 'C989';
--- Exemple sur PROPRIETAIRE (non autorisé)
-INSERT INTO PROPRIETAIRE (codeP, Pseudo, email, ville, anneeI)
-VALUES ('P999', 'PropTest', 'test@ex.com', 'Paris', 2025);
+SELECT * FROM AGENCE_VOYAGE.LOCATION WHERE ROWNUM <= 5;
 
+ INSERT INTO AGENCE_VOYAGE.LOCATION ("CodeC", "immat", "annee", "mois", "numloc", "km", "duree", "villed", "villea", "dated", "datef", "note", "avis")
+ VALUES ('C672', '11FG62', 2025, 1, 'X-999', 100, 3, 'Paris', 'Lyon', TO_DATE('2025-01-15', 'YYYY-MM-DD'), TO_DATE('2025-01-18', 'YYYY-MM-DD'), NULL, NULL);
+
+ UPDATE AGENCE_VOYAGE.LOCATION SET "km" = 150 WHERE "numloc" = 'X-999';
+
+ DELETE FROM AGENCE_VOYAGE.CLIENT WHERE "CodeC" = 'C672';
+
+ SELECT * FROM AGENCE_VOYAGE.CLIENT;
 
 
+-- ========== TEST AVEC USER_ADMIN ==========
+-- Connexion : user_admin / Admin123!
 
+SELECT * FROM AGENCE_VOYAGE.CLIENT FETCH FIRST 5 ROWS ONLY;
 
+ INSERT INTO AGENCE_VOYAGE.CLIENT VALUES ('C974', 'Admin', 'Test', 45, '888888', 'rue Admin', 'Marseille');
+
+ UPDATE AGENCE_VOYAGE.CLIENT SET "Nom" = 'AdminUpdated' WHERE "CodeC" = 'C974';
+
+ DELETE FROM AGENCE_VOYAGE.CLIENT WHERE "CodeC" = 'C974';
+
+ GRANT SELECT ON AGENCE_VOYAGE.VOITURE TO user_lecteur;
